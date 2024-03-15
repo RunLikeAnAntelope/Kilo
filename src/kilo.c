@@ -1,9 +1,48 @@
+/* Kilo -- A very simple editor in less than 1-kilo lines of code (as counted
+ *         by "cloc"). Does not depend on libcurses, directly emits VT100
+ *         escapes on the terminal.
+ *
+ * -----------------------------------------------------------------------
+ *
+ * Copyright (C) 2016 Salvatore Sanfilippo <antirez at gmail dot com>
+ *
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are
+ * met:
+ *
+ *  *  Redistributions of source code must retain the above copyright
+ *     notice, this list of conditions and the following disclaimer.
+ *
+ *  *  Redistributions in binary form must reproduce the above copyright
+ *     notice, this list of conditions and the following disclaimer in the
+ *     documentation and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+/* Information on the vt100 terminal can be found at
+ * https://vt100.net/docs/vt100-ug/chapter3.html#ED */
+
 /*+++ includes +++*/
 #include <asm-generic/errno-base.h>
+#include <asm-generic/ioctls.h>
 #include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/ioctl.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -11,17 +50,25 @@
 #define CTRL_KEY(k) ((k) & 0x1f)
 
 /*+++ data +++*/
-struct termios orig_termios;
+struct editorConfig {
+    int screenrows;
+    int screencols;
+    struct termios orig_termios;
+};
+
+struct editorConfig E;
 
 /*+++ terminal +++*/
-void die(const char *s) {
+void die(const char* s) {
+    write(STDOUT_FILENO, "\x1b[2J", 4);  // clear screen
+    write(STDOUT_FILENO, "\x1b[H", 3);   // reposition cursor
     perror(s);
     exit(1);
 }
 
 // restore original mode when we exit
 void disableRawMode() {
-    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios) == -1) {
+    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &E.orig_termios) == -1) {
         die("tcsetattr");
     }
 }
@@ -31,12 +78,12 @@ void enableRawMode() {
      * Enables "raw" mode of a terminal.
      ***************/
 
-    if (tcgetattr(STDIN_FILENO, &orig_termios) == -1) {
+    if (tcgetattr(STDIN_FILENO, &E.orig_termios) == -1) {
         die("tcsetattr");
     }
     atexit(disableRawMode);
 
-    struct termios raw = orig_termios;  // save original
+    struct termios raw = E.orig_termios;  // save original
 
     /***************
      * input flags
@@ -68,6 +115,7 @@ void enableRawMode() {
 
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
 }
+
 char editorReadKey() {
     int nread;
     char c;
@@ -79,6 +127,17 @@ char editorReadKey() {
     return c;
 }
 
+int getWindowSize(int* rows, int* cols) {
+    struct winsize ws;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1 || ws.ws_col == 0) {
+        return -1;
+    } else {
+        *cols = ws.ws_col;
+        *rows = ws.ws_row;
+        return 0;
+    }
+}
+
 /*+++ input +++*/
 void editorProcessKeypress() {
     char c = editorReadKey();
@@ -88,10 +147,44 @@ void editorProcessKeypress() {
             break;
     }
 }
+
+/*+++ output +++*/
+
+/*
+ * Here we are writing 4 bytes out to terminal "\x1b" is the escape character
+ * (27 in decimal). Escape sequences, which always start with the escape
+ * character followed by [, instruct the terminal to do various text formatting
+ * tasks, such as coloring text. In this case, the J command clears the screen.
+ * The arguments come first, in this case "2" is the argument, which clears the
+ * entire screen.
+ */
+
+// write tildas for lines with no content
+void editorDrawRows() {
+    int y;
+    for (y = 0; y < E.screenrows; y++) {
+        write(STDOUT_FILENO, "~\r\n", 3);
+    }
+}
+void editorRefreshScreen() {
+    write(STDOUT_FILENO, "\x1b[2J", 4);  // clear screen
+    write(STDOUT_FILENO, "\x1b[H", 3);   // cursor at the top left corner
+
+    editorDrawRows();                   // add tildas
+    write(STDOUT_FILENO, "\x1b[H", 3);  // cursor at top left corner
+}
+
 /*+++ init +++*/
+void initEditor() {
+    if (getWindowSize(&E.screenrows, &E.screencols) == -1) {
+        die("getWindowSize");
+    }
+}
 int main() {
     enableRawMode();
+    initEditor();
     while (1) {
+        editorRefreshScreen();
         editorProcessKeypress();
     }
     return 0;
