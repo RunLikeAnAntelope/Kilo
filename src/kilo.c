@@ -42,6 +42,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/ioctl.h>
 #include <termios.h>
 #include <unistd.h>
@@ -171,6 +172,28 @@ int getWindowSize(int* rows, int* cols) {
     }
 }
 
+/*+++ append buffer +++*/
+struct abuf {
+    char* b;
+    int len;
+};
+
+#define ABUF_INIT \
+    { NULL, 0 }
+
+void abAppend(struct abuf* ab, const char* s, int len) {
+    char* new = realloc(ab->b, ab->len + len);
+
+    if (new == NULL) {
+        return;
+    }
+
+    memcpy(&new[ab->len], s, len);
+    ab->b = new;
+    ab->len += len;
+}
+
+void abFree(struct abuf* ab) { free(ab->b); }
 /*+++ input +++*/
 void editorProcessKeypress() {
     char c = editorReadKey();
@@ -193,21 +216,26 @@ void editorProcessKeypress() {
  */
 
 // write tildas for lines with no content
-void editorDrawRows() {
+void editorDrawRows(struct abuf* ab) {
     int y;
     for (y = 0; y < E.screenrows; y++) {
-        write(STDOUT_FILENO, "~", 1);
+        abAppend(ab, "~", 1);
+        abAppend(ab, "\x1b[K", 3); // erase current line
         if (y < E.screenrows - 1) {
-            write(STDOUT_FILENO, "\r\n", 2);
+           abAppend(ab, "\r\n", 2); 
         }
     }
 }
 void editorRefreshScreen() {
-    write(STDOUT_FILENO, "\x1b[2J", 4);  // clear screen
-    write(STDOUT_FILENO, "\x1b[H", 3);   // cursor at the top left corner
+    struct abuf ab = ABUF_INIT;
+    abAppend(&ab, "\x1b[?25l", 6);
+    abAppend(&ab, "\x1b[H", 3);   // cusor at the top left corner
+    editorDrawRows(&ab);          // add tildas
+    abAppend(&ab, "\x1b[H", 3);   // cursor at top left corner
 
-    editorDrawRows();                   // add tildas
-    write(STDOUT_FILENO, "\x1b[H", 3);  // cursor at top left corner
+    abAppend(&ab, "\x1b[?25h", 6);
+    write(STDOUT_FILENO, ab.b, ab.len);
+    abFree(&ab);
 }
 
 /*+++ init +++*/
