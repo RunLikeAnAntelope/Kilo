@@ -48,10 +48,12 @@
 #include <unistd.h>
 
 /*+++ defines +++*/
+#define KILO_VERSION "0.0.1"
 #define CTRL_KEY(k) ((k) & 0x1f)
 
 /*+++ data +++*/
 struct editorConfig {
+    int cx, cy;
     int screenrows;
     int screencols;
     struct termios orig_termios;
@@ -195,11 +197,45 @@ void abAppend(struct abuf* ab, const char* s, int len) {
 
 void abFree(struct abuf* ab) { free(ab->b); }
 /*+++ input +++*/
+void editorMoveCursor(char key) {
+    switch (key) {
+        case 'a':
+            if (E.cx > 0) {
+                E.cx--;
+            }
+            break;
+        case 'd':
+            if (E.cx >= E.screencols) {
+                E.cx = E.screencols;
+            } else {
+                E.cx++;
+            }
+            break;
+        case 'w':
+            if (E.cy > 0) {
+                E.cy--;
+            }
+            break;
+        case 's':
+            if (E.cy >= E.screenrows) {
+                E.cy = E.screenrows;
+            } else {
+                E.cy++;
+            }
+            break;
+    }
+}
 void editorProcessKeypress() {
     char c = editorReadKey();
     switch (c) {
         case CTRL_KEY('q'):
             exit(0);
+            break;
+        case 'w':
+        case 's':
+        case 'a':
+        case 'd':
+            editorMoveCursor(c);
             break;
     }
 }
@@ -215,23 +251,51 @@ void editorProcessKeypress() {
  * entire screen.
  */
 
+void editorDrawWelcome(struct abuf* ab) {
+    char welcome[80];
+    int welcomelen = snprintf(welcome, sizeof(welcome),
+                              "Kilo editor -- version %s", KILO_VERSION);
+    if (welcomelen > E.screencols) {
+        welcomelen = E.screencols;
+    }
+
+    int padding = (E.screencols - welcomelen) / 2;
+    if (padding) {
+        abAppend(ab, "~", 1);
+    }
+
+    // center the welcome message
+    while (padding--) {
+        abAppend(ab, " ", 1);
+    }
+
+    abAppend(ab, welcome, welcomelen);
+}
 // write tildas for lines with no content
 void editorDrawRows(struct abuf* ab) {
     int y;
     for (y = 0; y < E.screenrows; y++) {
-        abAppend(ab, "~", 1);
-        abAppend(ab, "\x1b[K", 3); // erase current line
+        if (y == E.screenrows / 3) {
+            editorDrawWelcome(ab);
+        } else {
+            abAppend(ab, "~", 1);
+        }
+
+        abAppend(ab, "\x1b[K", 3);  // erase current line
         if (y < E.screenrows - 1) {
-           abAppend(ab, "\r\n", 2); 
+            abAppend(ab, "\r\n", 2);
         }
     }
 }
 void editorRefreshScreen() {
     struct abuf ab = ABUF_INIT;
     abAppend(&ab, "\x1b[?25l", 6);
-    abAppend(&ab, "\x1b[H", 3);   // cusor at the top left corner
-    editorDrawRows(&ab);          // add tildas
-    abAppend(&ab, "\x1b[H", 3);   // cursor at top left corner
+    abAppend(&ab, "\x1b[H", 3);  // cusor at the top left corner
+    editorDrawRows(&ab);         // add tildas
+
+    char buf[32];
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy + 1, E.cx + 1);
+    abAppend(&ab, buf, strlen(buf));
 
     abAppend(&ab, "\x1b[?25h", 6);
     write(STDOUT_FILENO, ab.b, ab.len);
@@ -240,6 +304,8 @@ void editorRefreshScreen() {
 
 /*+++ init +++*/
 void initEditor() {
+    E.cx = 0;
+    E.cy = 0;
     if (getWindowSize(&E.screenrows, &E.screencols) == -1) {
         die("getWindowSize");
     }
