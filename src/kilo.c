@@ -51,6 +51,8 @@
 #define KILO_VERSION "0.0.1"
 #define CTRL_KEY(k) ((k) & 0x1f)
 
+enum editorKey { ARROW_LEFT = 1000, ARROW_RIGHT, ARROW_UP, ARROW_DOWN };
+
 /*+++ data +++*/
 struct editorConfig {
     int cx, cy;
@@ -119,7 +121,7 @@ void enableRawMode() {
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
 }
 
-char editorReadKey() {
+int editorReadKey() {
     int nread;
     char c;
     while ((nread = read(STDIN_FILENO, &c, 1)) != 1) {
@@ -127,7 +129,33 @@ char editorReadKey() {
             die("read");
         }
     }
-    return c;
+    if (c == '\x1b') {
+        char seq[2];
+
+        if (read(STDIN_FILENO, &seq[0], 1) != 1) {
+            return '\x1b';
+        }
+
+        if (read(STDIN_FILENO, &seq[1], 1) != 1) {
+            return '\x1b';
+        }
+
+        if (seq[0] == '[') {
+            switch (seq[1]) {
+                case 'A':
+                    return ARROW_UP;
+                case 'B':
+                    return ARROW_DOWN;
+                case 'C':
+                    return ARROW_RIGHT;
+                case 'D':
+                    return ARROW_LEFT;
+            }
+        }
+        return '\x1b';
+    } else {
+        return c;
+    }
 }
 
 int getCursorPosition(int* rows, int* cols) {
@@ -197,44 +225,43 @@ void abAppend(struct abuf* ab, const char* s, int len) {
 
 void abFree(struct abuf* ab) { free(ab->b); }
 /*+++ input +++*/
-void editorMoveCursor(char key) {
+void editorMoveCursor(int key) {
     switch (key) {
-        case 'a':
+        case ARROW_LEFT:
             if (E.cx > 0) {
                 E.cx--;
             }
             break;
-        case 'd':
-            if (E.cx >= E.screencols) {
-                E.cx = E.screencols;
-            } else {
+        case ARROW_RIGHT:
+            if (E.cx != E.screencols - 1) {
                 E.cx++;
             }
             break;
-        case 'w':
+        case ARROW_UP:
             if (E.cy > 0) {
                 E.cy--;
             }
             break;
-        case 's':
-            if (E.cy >= E.screenrows) {
-                E.cy = E.screenrows;
-            } else {
+        case ARROW_DOWN:
+            if (E.cy != E.screenrows - 1) {
                 E.cy++;
             }
             break;
     }
 }
 void editorProcessKeypress() {
-    char c = editorReadKey();
+    int c = editorReadKey();
     switch (c) {
         case CTRL_KEY('q'):
+            write(STDOUT_FILENO, "\x1b[2J", 4);
+            write(STDOUT_FILENO, "\x1b[H", 3);
             exit(0);
             break;
-        case 'w':
-        case 's':
-        case 'a':
-        case 'd':
+
+        case ARROW_UP:
+        case ARROW_DOWN:
+        case ARROW_LEFT:
+        case ARROW_RIGHT:
             editorMoveCursor(c);
             break;
     }
