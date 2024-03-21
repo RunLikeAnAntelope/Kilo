@@ -45,12 +45,14 @@
 #include <asm-generic/ioctls.h>
 #include <ctype.h>
 #include <errno.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/types.h>
 #include <termios.h>
+#include <time.h>
 #include <unistd.h>
 
 /*+++ defines +++*/
@@ -87,6 +89,9 @@ struct editorConfig {
     int screencols;  // number of columns that can be displayed
     int numrows;     // number of rows of actual text we have
     erow* row;       // dynamic array of all rows in the file
+    char* filename;  // name of currently opened file
+    char statusmsg[80];
+    time_t statusmsg_time;
     struct termios orig_termios;
 };
 
@@ -312,6 +317,8 @@ void editorAppendRow(char* s, size_t len) {
 }
 /*+++ file i/o +++*/
 void editorOpen(char* filename) {
+    free(E.filename);
+    E.filename = strdup(filename);
     FILE* fp = fopen(filename, "r");
     if (!fp) die("fopen");
 
@@ -512,19 +519,40 @@ void editorDrawRows(struct abuf* ab) {
     }
 }
 
+void editorDrawMessageBar(struct abuf* ab) {
+    abAppend(ab, "\x1b[K", 3);
+    int msglen = strlen(E.statusmsg);
+    if (msglen > E.screencols) {
+        msglen = E.screencols;
+    }
+    if (msglen && time(NULL) - E.statusmsg_time < 5) {
+        abAppend(ab, E.statusmsg, msglen);
+    }
+}
+
 void editorDrawStatusBar(struct abuf* ab) {
     abAppend(ab, "\x1b[7m", 4);  // switch to inverted colors
-    int len = 0;
-    char* arr[4] = {"k", "i", "l", "o"};
-    while (len < 4) {
-        abAppend(ab, arr[len], 1);
-        len++;
+    char status[80];
+    char rstatus[80];
+    int len = snprintf(status, sizeof(status), "%.20s - %d lines",
+                       E.filename ? E.filename : "[No Name]", E.numrows);
+    int rlen = snprintf(rstatus, sizeof(rstatus), "%d/%d", E.cy + 1, E.numrows);
+
+    if (len > E.screencols) {
+        len = E.screencols;
     }
+    abAppend(ab, status, len);
     while (len < E.screencols) {
-        abAppend(ab, " ", 1);
-        len++;
+        if (E.screencols - len == rlen) {
+            abAppend(ab, rstatus, rlen);
+            break;
+        } else {
+            abAppend(ab, " ", 1);
+            len++;
+        }
     }
     abAppend(ab, "\x1b[m", 3);  // swtich to normal colors
+    abAppend(ab, "\r\n", 2);    // add another status bar
 }
 
 void editorRefreshScreen() {
@@ -532,8 +560,10 @@ void editorRefreshScreen() {
     struct abuf ab = ABUF_INIT;
     abAppend(&ab, "\x1b[?25l", 6);
     abAppend(&ab, "\x1b[H", 3);  // cusor at the top left corner
+
     editorDrawRows(&ab);
     editorDrawStatusBar(&ab);
+    editorDrawMessageBar(&ab);
 
     char buf[32];
     snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1,
@@ -545,6 +575,14 @@ void editorRefreshScreen() {
     abFree(&ab);
 }
 
+void editorSetStatusMessage(const char* fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(E.statusmsg, sizeof(E.statusmsg), fmt, ap);
+    va_end(ap);
+    E.statusmsg_time = time(NULL);
+}
+
 /*+++ init +++*/
 void initEditor() {
     E.cx = 0;
@@ -554,10 +592,14 @@ void initEditor() {
     E.coloff = 0;
     E.numrows = 0;
     E.row = NULL;
+    E.filename = NULL;
+    E.statusmsg[0] = '\0';
+    E.statusmsg_time = 0;
+
     if (getWindowSize(&E.screenrows, &E.screencols) == -1) {
         die("getWindowSize");
     }
-    E.screenrows -= 1;  // delete one row to use as status
+    E.screenrows -= 2;  // delete one row to use as status
 }
 int main(int argc, char* argv[]) {
     enableRawMode();
@@ -565,6 +607,8 @@ int main(int argc, char* argv[]) {
     if (argc >= 2) {
         editorOpen(argv[1]);
     }
+
+    editorSetStatusMessage("HELP: Ctrl-q = quit");
     while (1) {
         editorRefreshScreen();
         editorProcessKeypress();
