@@ -340,7 +340,6 @@ void editorDelRow(int at) {
     }
     editorFreeRow(&E.row[at]);
     memmove(&E.row[at], &E.row[at + 1], sizeof(erow) * (E.numrows - at - 1));
-    E.row = realloc(E.row, E.numrows - 1);
     E.numrows--;
     E.dirty++;
 }
